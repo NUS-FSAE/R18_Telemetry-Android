@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<menu xmlns:android="http://schemas.android.com/apk/res/android">
+    <item android:id="@+id/live_data"
+        android:title="Live Data"
+        android:icon="@mipmap/ic_dashboard_black_24dp"
+        />
+    <item android:id="@+id/communications"
+        android:title="Communications"
+        android:icon="@mipmap/ic_chat_black_24dp"/>
+    <item android:id="@+id/settings"
+        android:title="Settings"
+        android:icon="@mipmap/ic_settings_black_24dp"/>
+</menu>

@@ -1,0 +1,24 @@
+<resources>
+    <string name="app_name">FSAE Telemetry</string>
+    <string name="open">Open</string>
+    <string name="close">Close</string>
+    <string name="Tab1">Driver</string>
+    <string name="Tab2">Engine</string>
+    <string name="Tab3">Suspension</string>
+    <string name="labelSpeed">Speed</string>
+    <string name="labelGear">Gear</string>
+    <string name="labelRPM">RPM</string>
+    <string name="labelTp">Throttle</string>
+    <string name="labelBrake">Brake</string>
+    <string name="labelEngTemp">Eng Temp</string>
+    <string name="labelOilTemp">Oil Temp</string>
+    <string name="labelBatteryVolts">Battery</string>
+    <string name="labelAirTemp">Air Temp</string>
+    <string name="labelOilPress">Oil Pressure</string>
+    <string name="labelFuelPressure">Fuel Press</string>
+    <string name="labelBrakePressureFront">Brake Press</string>
+    <string name="brakeTemp">Brake Temp</string>
+    <string name="labelBrakeBias">Brake Bias</string>
+    <string name="labelTyreTempRRI">Tyre RRI</string>
+    <string name="labelTyreTempRRO">Tyre RRO</string>
+</resources>
