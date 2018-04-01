@@ -10,6 +10,9 @@ import android.net.rtp.AudioCodec;
 import android.net.rtp.AudioGroup;
 import android.net.rtp.AudioStream;
 import android.os.Handler;
+import android.os.StrictMode;
+import android.support.design.widget.FloatingActionButton;
+import android.support.design.widget.Snackbar;
 import android.support.v4.app.ActivityCompat;
 import android.support.v4.content.ContextCompat;
 import android.support.v4.view.ViewPager;
@@ -20,6 +23,7 @@ import android.os.Bundle;
 import android.support.v7.widget.Toolbar;
 import android.util.Log;
 import android.view.MenuItem;
+import android.view.View;
 import android.widget.ProgressBar;
 import android.widget.TextView;
 import android.os.Process;
@@ -29,6 +33,7 @@ import java.net.DatagramPacket;
 import java.net.DatagramSocket;
 import java.net.InetAddress;
 import java.net.InetSocketAddress;
+import java.net.Socket;
 import java.net.SocketAddress;
 import java.net.SocketException;
 import java.util.ArrayList;
@@ -39,6 +44,27 @@ import com.score.rahasak.utils.OpusEncoder;
 
 public class MainActivity extends AppCompatActivity {
 
+    private static boolean snackbarOff = true;
+    private Snackbar snackbar;
+    // Sample rate must be one supported by Opus.
+    private static final int SAMPLE_RATE = 8000;
+
+    // Number of samples per frame is not arbitrary,
+    // it must match one of the predefined values, specified in the standard.
+    private static final int FRAME_SIZE = 160;
+
+    // 1 or 2
+    private static final int NUM_CHANNELS = 1;
+
+    private static final int AUDIO_PORT = 5002;
+    private static final int AUDIO_CONTROL_PORT = 1880;
+    private static final String SERVER_IP_STRING = "192.168.0.101";
+
+    private Socket audioControlSocket;
+    private InetAddress serverIP;
+    private SocketAddress serverSocketAddress;
+    private DatagramSocket audioSocket;
+    private InetAddress remoteIP;
     private static final int MY_PERMISSIONS_REQUEST_RECORD_AUDIO = 1;
     private static final int PORT = 8018;
     private static final double MAX_BRAKE_PRESSURE = 70.0;
@@ -69,10 +95,13 @@ public class MainActivity extends AppCompatActivity {
     private TextView brakeBias;
     private TextView tyreTempRRI;
     private TextView tyreTempRRO;
+    private FloatingActionButton fab;
     private SectionsPageAdapter tabManager;
     private ArrayList<MyTab> tabList = new ArrayList<>();
     private DataStorage dataStoreMan = new DataStorage();
     private AudioThread audioThread;
+    private AudioRecord recorder;
+    private OpusEncoder encoder;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -107,12 +136,31 @@ public class MainActivity extends AppCompatActivity {
         tyreTempRRO = (TextView) findViewById(R.id.tyreTempRRO);
         tpProgress = (ProgressBar) findViewById(R.id.tpProgressBar);
         brakeProgress = (ProgressBar) findViewById(R.id.brakeProgressBar);
+        fab = (FloatingActionButton) findViewById(R.id.fab);
         // Set up the ViewPager and connect it to the Tablayout
 //        tabManager = new SectionsPageAdapter(getSupportFragmentManager());
 //        mViewPager = (ViewPager) findViewById(R.id.viewPager);
 //        setupViewPager(mViewPager,tabManager);
 //        TabLayout tabLayout = (TabLayout) findViewById(R.id.tabs);
 //        tabLayout.setupWithViewPager(mViewPager);\
+
+        fab.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View view) {
+                if(snackbarOff) {
+                    activateAudioStream();
+                    snackbar = Snackbar.make(view, "Here's a Snackbar", Snackbar.LENGTH_INDEFINITE);
+                    snackbar.setAction("Action", null).show();
+                    snackbarOff = false;
+                    fab.setImageResource(R.mipmap.ic_mic_black_24dp);
+                } else {
+                    audioThread.interrupt();
+                    snackbar.dismiss();
+                    snackbarOff = true;
+                    fab.setImageResource(R.mipmap.ic_mic_none_black_24dp);
+                }
+            }
+        });
 
         // Start background UDP listener
         initializeUdpListener();
@@ -170,8 +218,21 @@ public class MainActivity extends AppCompatActivity {
 //        return ip;
 //
 //    }
-
     private void initializeAudioStream() {
+        Thread initAudioControlSocket = new Thread(new Runnable() {
+            @Override
+            public void run() {
+                try {
+                    serverIP = InetAddress.getByName(SERVER_IP_STRING);
+                    serverSocketAddress = new InetSocketAddress(serverIP,AUDIO_CONTROL_PORT);
+                    audioControlSocket = new Socket(serverIP,AUDIO_CONTROL_PORT);
+                } catch (Exception e) {
+                    Log.e("audio_control_socket", e.toString(), e);
+                }
+            }
+        });
+        initAudioControlSocket.start();
+
         if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO)
                 != PackageManager.PERMISSION_GRANTED) {
             ActivityCompat.requestPermissions(this,
@@ -179,6 +240,33 @@ public class MainActivity extends AppCompatActivity {
                     MY_PERMISSIONS_REQUEST_RECORD_AUDIO);
             return;
         }
+
+        int minBufSize = AudioRecord.getMinBufferSize(SAMPLE_RATE,
+                NUM_CHANNELS == 1 ? AudioFormat.CHANNEL_IN_MONO : AudioFormat.CHANNEL_IN_STEREO,
+                AudioFormat.ENCODING_PCM_16BIT);
+
+        // initialize audio recorder
+        recorder = new AudioRecord(MediaRecorder.AudioSource.MIC,
+                SAMPLE_RATE,
+                NUM_CHANNELS == 1 ? AudioFormat.CHANNEL_IN_MONO : AudioFormat.CHANNEL_IN_STEREO,
+                AudioFormat.ENCODING_PCM_16BIT,
+                minBufSize);
+
+        // init opus encoder
+        encoder = new OpusEncoder();
+        encoder.init(SAMPLE_RATE, NUM_CHANNELS, OpusEncoder.OPUS_APPLICATION_VOIP);
+
+        try {
+            remoteIP = InetAddress.getByName("255.255.255.255");
+            audioSocket = new DatagramSocket(null);
+            audioSocket.setReuseAddress(true);
+            audioSocket.setBroadcast(true);
+        } catch (Exception e) {
+            Log.e("audio_socket", e.toString(), e);
+        }
+    }
+
+    private void activateAudioStream() {
         audioThread = new AudioThread();
         audioThread.start();
     }
@@ -226,7 +314,9 @@ public class MainActivity extends AppCompatActivity {
     @Override
     protected void onPause() {
         super.onPause();
-        audioThread.interrupt();
+        if(audioThread != null && audioThread.isAlive()) {
+            audioThread.interrupt();
+        }
     }
 
     @Override
@@ -253,47 +343,9 @@ public class MainActivity extends AppCompatActivity {
     }
 
     private class AudioThread extends Thread {
-        // Sample rate must be one supported by Opus.
-        private static final int SAMPLE_RATE = 8000;
-
-        // Number of samples per frame is not arbitrary,
-        // it must match one of the predefined values, specified in the standard.
-        private static final int FRAME_SIZE = 160;
-
-        // 1 or 2
-        private static final int NUM_CHANNELS = 1;
-
-        private static final int AUDIO_PORT = 5002;
-
-        private DatagramSocket audioSocket;
-        private InetAddress remoteIP;
-
         @Override
         public void run() {
             Process.setThreadPriority(Process.THREAD_PRIORITY_MORE_FAVORABLE);
-            int minBufSize = AudioRecord.getMinBufferSize(SAMPLE_RATE,
-                    NUM_CHANNELS == 1 ? AudioFormat.CHANNEL_IN_MONO : AudioFormat.CHANNEL_IN_STEREO,
-                    AudioFormat.ENCODING_PCM_16BIT);
-
-            // initialize audio recorder
-            AudioRecord recorder = new AudioRecord(MediaRecorder.AudioSource.MIC,
-                    SAMPLE_RATE,
-                    NUM_CHANNELS == 1 ? AudioFormat.CHANNEL_IN_MONO : AudioFormat.CHANNEL_IN_STEREO,
-                    AudioFormat.ENCODING_PCM_16BIT,
-                    minBufSize);
-
-            // init opus encoder
-            OpusEncoder encoder = new OpusEncoder();
-            encoder.init(SAMPLE_RATE, NUM_CHANNELS, OpusEncoder.OPUS_APPLICATION_VOIP);
-
-            try {
-                remoteIP = InetAddress.getByName("255.255.255.255");
-                audioSocket = new DatagramSocket(null);
-                audioSocket.setReuseAddress(true);
-                audioSocket.setBroadcast(true);
-            } catch (Exception e) {
-                Log.e("audio_socket", e.toString(), e);
-            }
 
             recorder.startRecording();
 
@@ -301,7 +353,7 @@ public class MainActivity extends AppCompatActivity {
             byte[] encBuf = new byte[1024];
 
             try {
-                while (true) {
+                while (!this.isInterrupted()) {
                     // Encoder must be fed entire frames.
                     int to_read = inBuf.length;
                     int offset = 0;
@@ -319,6 +371,7 @@ public class MainActivity extends AppCompatActivity {
                     DatagramPacket audioPacket = new DatagramPacket(encBuf, encBuf.length,remoteIP,AUDIO_PORT);
                     audioSocket.send(audioPacket);
                 }
+                recorder.stop();
             } catch (Exception e) {
                 Log.e("audio_socket",e.toString(),e);
             }
