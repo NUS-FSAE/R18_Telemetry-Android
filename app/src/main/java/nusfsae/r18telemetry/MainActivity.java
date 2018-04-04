@@ -9,6 +9,7 @@ import android.media.MediaRecorder;
 import android.net.rtp.AudioCodec;
 import android.net.rtp.AudioGroup;
 import android.net.rtp.AudioStream;
+import android.os.AsyncTask;
 import android.os.Handler;
 import android.os.StrictMode;
 import android.support.design.widget.FloatingActionButton;
@@ -43,40 +44,21 @@ import com.score.rahasak.utils.OpusDecoder;
 import com.score.rahasak.utils.OpusEncoder;
 
 public class MainActivity extends AppCompatActivity {
+    
+    private static final double MAX_BRAKE_PRESSURE = 70.0;
+    private static final int MY_PERMISSIONS_REQUEST_RECORD_AUDIO = 1;
 
+    private AudioStreamThread audioThread ;
+    private UdpListener udpListener;
+    private DataStorage dataStorage;
+    private TcpClient mTcpClient;
+    private Handler dataUpdateHandler;
+    
     private static boolean snackbarOff = true;
     private Snackbar snackbar;
-    // Sample rate must be one supported by Opus.
-    private static final int SAMPLE_RATE = 8000;
-
-    // Number of samples per frame is not arbitrary,
-    // it must match one of the predefined values, specified in the standard.
-    private static final int FRAME_SIZE = 160;
-
-    // 1 or 2
-    private static final int NUM_CHANNELS = 1;
-
-    private static final int AUDIO_PORT = 5002;
-    private static final int AUDIO_CONTROL_PORT = 1880;
-    private static final String SERVER_IP_STRING = "192.168.0.101";
-
-    private Socket audioControlSocket;
-    private InetAddress serverIP;
-    private SocketAddress serverSocketAddress;
-    private DatagramSocket audioSocket;
-    private InetAddress remoteIP;
-    private static final int MY_PERMISSIONS_REQUEST_RECORD_AUDIO = 1;
-    private static final int PORT = 8018;
-    private static final double MAX_BRAKE_PRESSURE = 70.0;
-    private DatagramSocket socket;
-    private static DatagramPacket udpPacket;
-    private static byte[] data;
-    private static final int DATA_LENGTH = 10;
-    private Handler dataUpdateHandler;
     private DrawerLayout mDrawerLayout;
     private ActionBarDrawerToggle mToggle;
     private Toolbar mToolbar;
-    private ViewPager mViewPager;
     private TextView speed;
     private TextView gear;
     private TextView rpm;
@@ -97,12 +79,9 @@ public class MainActivity extends AppCompatActivity {
     private TextView tyreTempRRO;
     private FloatingActionButton fab;
     private SectionsPageAdapter tabManager;
+    private ViewPager mViewPager;
     private ArrayList<MyTab> tabList = new ArrayList<>();
-    private DataStorage dataStoreMan = new DataStorage();
-    private AudioThread audioThread;
-    private AudioRecord recorder;
-    private OpusEncoder encoder;
-
+    
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
@@ -169,70 +148,7 @@ public class MainActivity extends AppCompatActivity {
         dataUpdateHandler.postDelayed(updateUI, 500);
     }
 
-    private Runnable updateUI = new Runnable() {
-        //get the current active tab and the tiles
-        //call the respective Tile's update function
-        @Override
-        public void run() {
-            //Fragment currentTab = tabManager.getItem(mViewPager.getCurrentItem());
-            int currentTp = dataStoreMan.getThrottleData();
-            int currentBrake = dataStoreMan.getBrakeData();
-
-            speed.setText(Integer.toString(dataStoreMan.getSpeedData()));
-            gear.setText(Integer.toString(dataStoreMan.getGearData()));
-            rpm.setText(Double.toString(dataStoreMan.getRpmData()));
-            tp.setText(Integer.toString(currentTp));
-            brake.setText(Integer.toString((int) (currentBrake / MAX_BRAKE_PRESSURE * 100)));
-            airTemp.setText(Integer.toString(dataStoreMan.getAirTemp()));
-            oilTemp.setText(Integer.toString(dataStoreMan.getOilTempData()));
-            engTemp.setText(Integer.toString(dataStoreMan.getEngTempData()));
-            battery.setText(Double.toString(dataStoreMan.getbatteryVoltsData()));
-            oilPress.setText(Integer.toString(dataStoreMan.getOilPressureData()));
-            fuelPress.setText(Integer.toString(dataStoreMan.getFuelPressure()));
-            brakePress.setText(Double.toString(currentBrake / 10.0));
-            brakeTemp.setText(Integer.toString(dataStoreMan.getBrakeTempData()));
-            brakeBias.setText(Integer.toString(dataStoreMan.getBrakeBiasData()));
-            tyreTempRRI.setText(Integer.toString(dataStoreMan.getTyreTempRRI()));
-            tyreTempRRO.setText(Integer.toString(dataStoreMan.getTyreTempRRO()));
-            tpProgress.setProgress(currentTp);
-            brakeProgress.setProgress((int) (currentBrake / MAX_BRAKE_PRESSURE * 100));
-            dataUpdateHandler.post(this);
-        }
-    };
-
-//    public static byte[] getLocalIPAddress () {
-//        byte ip[]=null;
-//        try {
-//            for (Enumeration en = NetworkInterface.getNetworkInterfaces(); en.hasMoreElements();) {
-//                NetworkInterface intf = en.nextElement();
-//                for (Enumeration enumIpAddr = intf.getInetAddresses(); enumIpAddr.hasMoreElements();) {
-//                    InetAddress inetAddress = enumIpAddr.nextElement();
-//                    if (!inetAddress.isLoopbackAddress()) {
-//                        ip= inetAddress.getAddress();
-//                    }
-//                }
-//            }
-//        } catch (SocketException ex) {
-//            Log.i("SocketException ", ex.toString());
-//        }
-//        return ip;
-//
-//    }
     private void initializeAudioStream() {
-        Thread initAudioControlSocket = new Thread(new Runnable() {
-            @Override
-            public void run() {
-                try {
-                    serverIP = InetAddress.getByName(SERVER_IP_STRING);
-                    serverSocketAddress = new InetSocketAddress(serverIP,AUDIO_CONTROL_PORT);
-                    audioControlSocket = new Socket(serverIP,AUDIO_CONTROL_PORT);
-                } catch (Exception e) {
-                    Log.e("audio_control_socket", e.toString(), e);
-                }
-            }
-        });
-        initAudioControlSocket.start();
-
         if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO)
                 != PackageManager.PERMISSION_GRANTED) {
             ActivityCompat.requestPermissions(this,
@@ -240,63 +156,18 @@ public class MainActivity extends AppCompatActivity {
                     MY_PERMISSIONS_REQUEST_RECORD_AUDIO);
             return;
         }
-
-        int minBufSize = AudioRecord.getMinBufferSize(SAMPLE_RATE,
-                NUM_CHANNELS == 1 ? AudioFormat.CHANNEL_IN_MONO : AudioFormat.CHANNEL_IN_STEREO,
-                AudioFormat.ENCODING_PCM_16BIT);
-
-        // initialize audio recorder
-        recorder = new AudioRecord(MediaRecorder.AudioSource.MIC,
-                SAMPLE_RATE,
-                NUM_CHANNELS == 1 ? AudioFormat.CHANNEL_IN_MONO : AudioFormat.CHANNEL_IN_STEREO,
-                AudioFormat.ENCODING_PCM_16BIT,
-                minBufSize);
-
-        // init opus encoder
-        encoder = new OpusEncoder();
-        encoder.init(SAMPLE_RATE, NUM_CHANNELS, OpusEncoder.OPUS_APPLICATION_VOIP);
-
-        try {
-            remoteIP = InetAddress.getByName("255.255.255.255");
-            audioSocket = new DatagramSocket(null);
-            audioSocket.setReuseAddress(true);
-            audioSocket.setBroadcast(true);
-        } catch (Exception e) {
-            Log.e("audio_socket", e.toString(), e);
-        }
     }
 
     private void activateAudioStream() {
-        audioThread = new AudioThread();
+        audioThread = new AudioStreamThread();
         audioThread.start();
     }
 
     private void initializeUdpListener() {
-        try {
-            socket = new DatagramSocket(null);
-            socket.setReuseAddress(true);
-            socket.setBroadcast(true);
-            socket.bind(new InetSocketAddress(PORT));
-        } catch (Exception e) {
-            Log.e("udpListener", e.toString(), e);
-        }
-        Thread networkThread = new Thread(new Runnable() {
-            @Override
-            public void run() {
-                while (true) {
-                    try {
-                        data = new byte[DATA_LENGTH];
-                        udpPacket = new DatagramPacket(data, data.length);
-                        socket.receive(udpPacket);
-                        dataStoreMan.insertData(udpPacket.getData());
-                    } catch (Exception e) {
-                        Log.e("udpListener", "receive timeout", e);
-                    }
-                }
-            }
-        });
-        networkThread.setPriority(Thread.NORM_PRIORITY);
-        networkThread.start();
+        dataStorage = new DataStorage();
+        udpListener = new UdpListener(dataStorage);
+        udpListener.setPriority(Thread.NORM_PRIORITY);
+        udpListener.start();
     }
 
     // Connects the ViewPager with the Fragment manager (adapter)
@@ -327,7 +198,7 @@ public class MainActivity extends AppCompatActivity {
             case MY_PERMISSIONS_REQUEST_RECORD_AUDIO: {
                 if (grantResults.length > 0
                         && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
-                    initializeAudioStream();
+                    //initializeAudioStream();
                 }
             }
         }
@@ -342,39 +213,61 @@ public class MainActivity extends AppCompatActivity {
         return super.onOptionsItemSelected(item);
     }
 
-    private class AudioThread extends Thread {
+    private Runnable updateUI = new Runnable() {
+        //get the current active tab and the tiles
+        //call the respective Tile's update function
         @Override
         public void run() {
-            Process.setThreadPriority(Process.THREAD_PRIORITY_MORE_FAVORABLE);
+            //Fragment currentTab = tabManager.getItem(mViewPager.getCurrentItem());
+            int currentTp = dataStorage.getThrottleData();
+            int currentBrake = dataStorage.getBrakeData();
 
-            recorder.startRecording();
+            speed.setText(Integer.toString(dataStorage.getSpeedData()));
+            gear.setText(Integer.toString(dataStorage.getGearData()));
+            rpm.setText(Double.toString(dataStorage.getRpmData()));
+            tp.setText(Integer.toString(currentTp));
+            brake.setText(Integer.toString((int) (currentBrake / MAX_BRAKE_PRESSURE * 100)));
+            airTemp.setText(Integer.toString(dataStorage.getAirTemp()));
+            oilTemp.setText(Integer.toString(dataStorage.getOilTempData()));
+            engTemp.setText(Integer.toString(dataStorage.getEngTempData()));
+            battery.setText(Double.toString(dataStorage.getbatteryVoltsData()));
+            oilPress.setText(Integer.toString(dataStorage.getOilPressureData()));
+            fuelPress.setText(Integer.toString(dataStorage.getFuelPressure()));
+            brakePress.setText(Double.toString(currentBrake / 10.0));
+            brakeTemp.setText(Integer.toString(dataStorage.getBrakeTempData()));
+            brakeBias.setText(Integer.toString(dataStorage.getBrakeBiasData()));
+            tyreTempRRI.setText(Integer.toString(dataStorage.getTyreTempRRI()));
+            tyreTempRRO.setText(Integer.toString(dataStorage.getTyreTempRRO()));
+            tpProgress.setProgress(currentTp);
+            brakeProgress.setProgress((int) (currentBrake / MAX_BRAKE_PRESSURE * 100));
+            dataUpdateHandler.post(this);
+        }
+    };
 
-            byte[] inBuf = new byte[FRAME_SIZE * NUM_CHANNELS * 2];
-            byte[] encBuf = new byte[1024];
+    private class ConnectTask extends AsyncTask<String, String, TcpClient> {
+        @Override
+        protected TcpClient doInBackground(String... message) {
 
-            try {
-                while (!this.isInterrupted()) {
-                    // Encoder must be fed entire frames.
-                    int to_read = inBuf.length;
-                    int offset = 0;
-                    while (to_read > 0) {
-                        int read = recorder.read(inBuf, offset, to_read);
-                        if (read < 0) {
-                            throw new RuntimeException("recorder.read() returned error " + read);
-                        }
-                        to_read -= read;
-                        offset += read;
-                    }
-                    int encoded = encoder.encode(inBuf, FRAME_SIZE, encBuf);
-                    Log.v("Opus", "Encoded " + inBuf.length + " bytes of audio into " + encoded + " bytes");
-                    //byte[] encData = Arrays.copyOf(encBuf, encoded);
-                    DatagramPacket audioPacket = new DatagramPacket(encBuf, encBuf.length,remoteIP,AUDIO_PORT);
-                    audioSocket.send(audioPacket);
+            //we create a TCPClient object
+            mTcpClient = new TcpClient(new TcpClient.OnMessageReceived() {
+                @Override
+                //here the messageReceived method is implemented
+                public void messageReceived(String message) {
+                    // process the received message from TCP server
                 }
-                recorder.stop();
-            } catch (Exception e) {
-                Log.e("audio_socket",e.toString(),e);
-            }
+            });
+            mTcpClient.run();
+
+            return null;
+        }
+
+        @Override
+        protected void onProgressUpdate(String... values) {
+            super.onProgressUpdate(values);
+            //response received from server
+            Log.d("test", "response " + values[0]);
+            //process server response here....
+
         }
     }
 }
