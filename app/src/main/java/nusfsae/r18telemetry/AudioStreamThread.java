@@ -27,7 +27,7 @@ public class AudioStreamThread extends Thread {
     private static final int NUM_CHANNELS = 1;
     private static final int MY_PERMISSIONS_REQUEST_RECORD_AUDIO = 1;
 
-    private static final int AUDIO_PORT = 5002;
+    private static final int AUDIO_PORT = 5003;
 
     private AudioRecord recorder;
     private OpusEncoder encoder;

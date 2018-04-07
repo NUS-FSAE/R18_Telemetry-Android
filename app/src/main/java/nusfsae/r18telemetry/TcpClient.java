@@ -11,7 +11,9 @@ import java.net.Socket;
 
 public class TcpClient {
 
-    public static final String SERVER_IP = "192.168.0.101"; //server IP address
+    private static final String REGISTER_USER_BYTE_MESSAGE = "~";
+    private static final String userName = "Test";
+    public static final String SERVER_IP = "192.168.0.103"; //server IP address
     public static final int SERVER_PORT = 1880;
     // message to send to the server
     private String mServerMessage;
@@ -28,7 +30,7 @@ public class TcpClient {
      * Constructor of the class. OnMessagedReceived listens for the messages received from server
      */
     public TcpClient(OnMessageReceived listener) {
-        mMessageListener = listener;
+        this.mMessageListener = listener;
     }
 
     /**
@@ -42,13 +44,30 @@ public class TcpClient {
             public void run() {
                 if (mBufferOut != null) {
                     Log.d("TCP Client", "Sending: " + message);
-                    mBufferOut.println(message + "\r\n");
+                    mBufferOut.println(message);
                     mBufferOut.flush();
                 }
             }
         };
         Thread thread = new Thread(runnable);
         thread.start();
+    }
+
+    public void sendByte(final byte mByte) {
+        Runnable runnable = new Runnable() {
+            @Override
+            public void run() {
+                if (mBufferOut != null) {
+                    Log.d("TCP Client","Sending byte: " + mByte);
+                    mBufferOut.println(mByte);
+                    mBufferOut.flush();
+                }
+            }
+        };
+    }
+
+    private void registerUser() {
+        sendMessage(REGISTER_USER_BYTE_MESSAGE + userName);
     }
 
     /**
@@ -81,6 +100,7 @@ public class TcpClient {
 
             //create a socket to make the connection with the server
             Socket socket = new Socket(serverAddr, SERVER_PORT);
+            socket.setSoTimeout(100);
 
             try {
 
@@ -90,21 +110,22 @@ public class TcpClient {
                 //receives the message which the server sends back
                 mBufferIn = new BufferedReader(new InputStreamReader(socket.getInputStream()));
 
+                registerUser();
 
                 //in this while the client listens for the messages sent by the server
                 while (mRun) {
 
-                    mServerMessage = mBufferIn.readLine();
-
-                    if (mServerMessage != null && mMessageListener != null) {
-                        //call the method messageReceived from MyActivity class
-                        mMessageListener.messageReceived(mServerMessage);
+                    try {
+                        mServerMessage = mBufferIn.readLine();
+                        if (mServerMessage != null && mMessageListener != null) {
+                            //call the method messageReceived from MyActivity class
+                            Log.e("RESPONSE FROM SERVER", "S: Received Message: '" + mServerMessage + "'");
+                            mMessageListener.messageReceived(mServerMessage);
+                        }
+                    } catch (Exception e) {
+                        //Log.e("TCP", "S: Error", e);
                     }
-
                 }
-
-                Log.e("RESPONSE FROM SERVER", "S: Received Message: '" + mServerMessage + "'");
-
             } catch (Exception e) {
 
                 Log.e("TCP", "S: Error", e);
@@ -112,7 +133,7 @@ public class TcpClient {
             } finally {
                 //the socket must be closed. It is not possible to reconnect to this socket
                 // after it is closed, which means a new socket instance has to be created.
-                socket.close();
+                //socket.close();
             }
 
         } catch (Exception e) {

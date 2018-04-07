@@ -4,11 +4,6 @@ import android.Manifest;
 import android.content.pm.PackageManager;
 import android.media.AudioFormat;
 import android.media.AudioManager;
-import android.media.AudioRecord;
-import android.media.MediaRecorder;
-import android.net.rtp.AudioCodec;
-import android.net.rtp.AudioGroup;
-import android.net.rtp.AudioStream;
 import android.os.AsyncTask;
 import android.os.Handler;
 import android.os.StrictMode;
@@ -27,21 +22,8 @@ import android.view.MenuItem;
 import android.view.View;
 import android.widget.ProgressBar;
 import android.widget.TextView;
-import android.os.Process;
-
-import java.io.IOException;
-import java.net.DatagramPacket;
-import java.net.DatagramSocket;
-import java.net.InetAddress;
-import java.net.InetSocketAddress;
-import java.net.Socket;
-import java.net.SocketAddress;
-import java.net.SocketException;
 import java.util.ArrayList;
-import java.util.Arrays;
 
-import com.score.rahasak.utils.OpusDecoder;
-import com.score.rahasak.utils.OpusEncoder;
 
 public class MainActivity extends AppCompatActivity {
     
@@ -49,9 +31,12 @@ public class MainActivity extends AppCompatActivity {
     private static final int MY_PERMISSIONS_REQUEST_RECORD_AUDIO = 1;
 
     private AudioStreamThread audioThread ;
+    private AudioReceiveThread audioReceiveThread;
     private UdpListener udpListener;
     private DataStorage dataStorage;
     private TcpClient mTcpClient;
+    private TcpClient.OnMessageReceived tcpDelegate;
+
     private Handler dataUpdateHandler;
     
     private static boolean snackbarOff = true;
@@ -123,6 +108,15 @@ public class MainActivity extends AppCompatActivity {
 //        TabLayout tabLayout = (TabLayout) findViewById(R.id.tabs);
 //        tabLayout.setupWithViewPager(mViewPager);\
 
+        initializeUdpListener();
+        initializeFAB();
+        dataUpdateHandler = new Handler();
+        dataUpdateHandler.postDelayed(updateUI, 500);
+        initializeAudioStream();
+        connectToServer();
+    }
+
+    private  void initializeFAB() {
         fab.setOnClickListener(new View.OnClickListener() {
             @Override
             public void onClick(View view) {
@@ -140,12 +134,24 @@ public class MainActivity extends AppCompatActivity {
                 }
             }
         });
+    }
 
-        // Start background UDP listener
-        initializeUdpListener();
-        initializeAudioStream();
-        dataUpdateHandler = new Handler();
-        dataUpdateHandler.postDelayed(updateUI, 500);
+    // OnMessageReceived() from server implemented here
+    private void connectToServer() {
+        mTcpClient = new TcpClient(new TcpClient.OnMessageReceived() {
+            @Override
+            //here the messageReceived method is implemented
+            public void messageReceived(String message) {
+                // process the received message from TCP server
+                Log.i("onMessageReceived","message");
+                if(message.equals("Registered")) {
+                    audioReceiveThread = new AudioReceiveThread();
+                    audioReceiveThread.start();
+                    Log.i("Registered","Registered");
+                }
+            }
+        });
+        new ConnectTcpServerTask().execute();
     }
 
     private void initializeAudioStream() {
@@ -187,6 +193,17 @@ public class MainActivity extends AppCompatActivity {
         super.onPause();
         if(audioThread != null && audioThread.isAlive()) {
             audioThread.interrupt();
+        }
+        if(audioReceiveThread != null) {
+            audioReceiveThread.interrupt();
+        }
+    }
+
+    @Override
+    protected void onStop() {
+        super.onStop();
+        if(mTcpClient != null) {
+            mTcpClient.stopClient();
         }
     }
 
@@ -244,20 +261,10 @@ public class MainActivity extends AppCompatActivity {
         }
     };
 
-    private class ConnectTask extends AsyncTask<String, String, TcpClient> {
+    private class ConnectTcpServerTask extends AsyncTask<String, String, TcpClient> {
         @Override
         protected TcpClient doInBackground(String... message) {
-
-            //we create a TCPClient object
-            mTcpClient = new TcpClient(new TcpClient.OnMessageReceived() {
-                @Override
-                //here the messageReceived method is implemented
-                public void messageReceived(String message) {
-                    // process the received message from TCP server
-                }
-            });
             mTcpClient.run();
-
             return null;
         }
 
@@ -270,5 +277,6 @@ public class MainActivity extends AppCompatActivity {
 
         }
     }
+
 }
 
