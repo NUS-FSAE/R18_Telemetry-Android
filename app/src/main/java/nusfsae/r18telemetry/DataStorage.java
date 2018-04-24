@@ -2,6 +2,9 @@ package nusfsae.r18telemetry;
 
 import android.provider.ContactsContract;
 
+import java.nio.charset.Charset;
+import java.util.Arrays;
+
 /**
  * Created by FSAE on 12-Mar-18.
  */
@@ -17,6 +20,7 @@ public class DataStorage {
     public static Object lock3 = new Object();
     public static Object lock4 = new Object();
 
+    private static String serverIP = null;
     private static int throttle;
     private static int brake;
     private static int gear;
@@ -89,7 +93,25 @@ public class DataStorage {
 
                 }
                 break;
-            default:
+            case (byte)0xFE:
+                if(serverIP == null) {
+                    int zeroIndex =  data.length;
+                    for (int i=0; i<data.length; ++i) {
+                        if(data[i] == 0) {
+                            zeroIndex = i;
+                        }
+                    }
+                    serverIP = new String(Arrays.copyOfRange(data,1,zeroIndex), Charset.forName("UTF-8"));
+                }
+                break;
+        }
+    }
+
+    public String getServerIP() {
+        if(serverIP == null) {
+            return "";
+        } else {
+            return serverIP;
         }
     }
 

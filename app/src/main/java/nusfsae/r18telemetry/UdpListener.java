@@ -5,9 +5,9 @@ import java.net.DatagramPacket;
 import java.net.DatagramSocket;
 import java.net.InetSocketAddress;
 
-public class UdpListener extends Thread{
+public class UdpListener extends Thread {
 
-    private static final int DATA_LENGTH = 10;
+    private static final int DATA_LENGTH = 15;
     private static final int PORT = 8018;
     private DatagramSocket socket;
     private static DatagramPacket udpPacket;

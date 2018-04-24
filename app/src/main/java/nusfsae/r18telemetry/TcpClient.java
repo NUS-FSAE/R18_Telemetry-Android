@@ -11,10 +11,13 @@ import java.net.Socket;
 
 public class TcpClient {
 
-    private static final String REGISTER_USER_BYTE_MESSAGE = "~";
+    private static final char REGISTER_USER_BYTE_MESSAGE = 0x7E;
+    private static final char REQUEST_AUDIO_TRANSMISSION = 0x8E;
+    private static final char TERMINATE_AUDIO_TRANSMISSION = 0XAE;
     private static final String userName = "Test";
-    public static final String SERVER_IP = "192.168.0.103"; //server IP address
     public static final int SERVER_PORT = 1880;
+    // serverIp address
+    private String serverIP = "192.168.0.100";
     // message to send to the server
     private String mServerMessage;
     // sends message received notifications
@@ -33,6 +36,11 @@ public class TcpClient {
         this.mMessageListener = listener;
     }
 
+    // This method must be called before calling run()
+    public void setServerIP(String serverIP) {
+        this.serverIP = serverIP;
+    }
+
     /**
      * Sends the message entered by client to the server
      *
@@ -44,7 +52,7 @@ public class TcpClient {
             public void run() {
                 if (mBufferOut != null) {
                     Log.d("TCP Client", "Sending: " + message);
-                    mBufferOut.println(message);
+                    mBufferOut.print(message);
                     mBufferOut.flush();
                 }
             }
@@ -53,20 +61,30 @@ public class TcpClient {
         thread.start();
     }
 
-    public void sendByte(final byte mByte) {
+    public void sendByte(final char command) {
         Runnable runnable = new Runnable() {
             @Override
             public void run() {
                 if (mBufferOut != null) {
-                    Log.d("TCP Client","Sending byte: " + mByte);
-                    mBufferOut.println(mByte);
+                    Log.d("TCP Client", "Sending: " + command);
+                    mBufferOut.print(command);
                     mBufferOut.flush();
                 }
             }
         };
+        Thread thread = new Thread(runnable);
+        thread.start();
     }
 
-    private void registerUser() {
+    public void requestAudioTransmission() {
+        sendByte(REQUEST_AUDIO_TRANSMISSION);
+    }
+
+    public void terminateAudioTransmission() {
+        sendByte(TERMINATE_AUDIO_TRANSMISSION);
+    }
+
+    public void registerUser() {
         sendMessage(REGISTER_USER_BYTE_MESSAGE + userName);
     }
 
@@ -94,7 +112,7 @@ public class TcpClient {
 
         try {
             //here you must put your computer's IP address.
-            InetAddress serverAddr = InetAddress.getByName(SERVER_IP);
+            InetAddress serverAddr = InetAddress.getByName(serverIP);
 
             Log.e("TCP Client", "C: Connecting...");
 

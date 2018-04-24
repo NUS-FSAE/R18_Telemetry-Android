@@ -2,11 +2,9 @@ package nusfsae.r18telemetry;
 
 import android.Manifest;
 import android.content.pm.PackageManager;
-import android.media.AudioFormat;
-import android.media.AudioManager;
 import android.os.AsyncTask;
 import android.os.Handler;
-import android.os.StrictMode;
+import android.support.design.widget.CoordinatorLayout;
 import android.support.design.widget.FloatingActionButton;
 import android.support.design.widget.Snackbar;
 import android.support.v4.app.ActivityCompat;
@@ -29,6 +27,8 @@ public class MainActivity extends AppCompatActivity {
     
     private static final double MAX_BRAKE_PRESSURE = 70.0;
     private static final int MY_PERMISSIONS_REQUEST_RECORD_AUDIO = 1;
+    private static final String AUDIO_RECEIVE_ACTIVE_MESSAGE = "Transmitting:";
+    private static final String AUDIO_TRANSMIT_REJECTED_MESSAGE = "Channel in use";
 
     private AudioStreamThread audioThread ;
     private AudioReceiveThread audioReceiveThread;
@@ -38,8 +38,14 @@ public class MainActivity extends AppCompatActivity {
     private TcpClient.OnMessageReceived tcpDelegate;
 
     private Handler dataUpdateHandler;
-    
+
+    private static String transmitting_client_ID = "";
+    private static boolean audio_receive_active = false;
+    private static boolean audio_transmit_rejected = false;
+    private static boolean audio_transmit_enabled = false;
+    private static boolean registered = false;
     private static boolean snackbarOff = true;
+    private CoordinatorLayout parentView;
     private Snackbar snackbar;
     private DrawerLayout mDrawerLayout;
     private ActionBarDrawerToggle mToggle;
@@ -101,6 +107,7 @@ public class MainActivity extends AppCompatActivity {
         tpProgress = (ProgressBar) findViewById(R.id.tpProgressBar);
         brakeProgress = (ProgressBar) findViewById(R.id.brakeProgressBar);
         fab = (FloatingActionButton) findViewById(R.id.fab);
+        parentView = (CoordinatorLayout) findViewById(R.id.parentView);
         // Set up the ViewPager and connect it to the Tablayout
 //        tabManager = new SectionsPageAdapter(getSupportFragmentManager());
 //        mViewPager = (ViewPager) findViewById(R.id.viewPager);
@@ -109,6 +116,7 @@ public class MainActivity extends AppCompatActivity {
 //        tabLayout.setupWithViewPager(mViewPager);\
 
         initializeUdpListener();
+        initializeSnackBar();
         initializeFAB();
         dataUpdateHandler = new Handler();
         dataUpdateHandler.postDelayed(updateUI, 500);
@@ -120,17 +128,12 @@ public class MainActivity extends AppCompatActivity {
         fab.setOnClickListener(new View.OnClickListener() {
             @Override
             public void onClick(View view) {
-                if(snackbarOff) {
-                    activateAudioStream();
-                    snackbar = Snackbar.make(view, "Here's a Snackbar", Snackbar.LENGTH_INDEFINITE);
-                    snackbar.setAction("Action", null).show();
-                    snackbarOff = false;
-                    fab.setImageResource(R.mipmap.ic_mic_black_24dp);
-                } else {
-                    audioThread.interrupt();
-                    snackbar.dismiss();
-                    snackbarOff = true;
-                    fab.setImageResource(R.mipmap.ic_mic_none_black_24dp);
+                if(registered && snackbarOff && !audio_transmit_enabled && !audio_receive_active) {
+                    new RequestAudioTransmissionTask().executeOnExecutor(AsyncTask.THREAD_POOL_EXECUTOR);
+                } else if(audio_transmit_enabled) {
+                    audio_transmit_enabled = false;
+                    deactivateAudioStream();
+                    mTcpClient.terminateAudioTransmission();
                 }
             }
         });
@@ -143,12 +146,21 @@ public class MainActivity extends AppCompatActivity {
             //here the messageReceived method is implemented
             public void messageReceived(String message) {
                 // process the received message from TCP server
-                Log.i("onMessageReceived","message");
                 if(message.equals("Registered")) {
-                    audioReceiveThread = new AudioReceiveThread();
-                    audioReceiveThread.start();
-                    Log.i("Registered","Registered");
+                    registered = true;
+                } else if(message.equals("Granted")) {   //grant audio access command
+                    audio_transmit_enabled = true;
+                    Log.e("onMessageReceived","audio_transmit_enabled" );
+                } else if(message.equals(AUDIO_TRANSMIT_REJECTED_MESSAGE)) {
+                    audio_transmit_rejected = true;
+                } else if(message.contains(AUDIO_RECEIVE_ACTIVE_MESSAGE)) {
+                    audio_transmit_enabled = false;
+                    audio_transmit_rejected = false;
+                    audio_receive_active = true;
+                    transmitting_client_ID = message;
                 }
+//                audioReceiveThread = new AudioReceiveThread();
+//                audioReceiveThread.start();
             }
         });
         new ConnectTcpServerTask().execute();
@@ -167,6 +179,14 @@ public class MainActivity extends AppCompatActivity {
     private void activateAudioStream() {
         audioThread = new AudioStreamThread();
         audioThread.start();
+    }
+
+    private void deactivateAudioStream() {
+        audioThread.interrupt();
+    }
+
+    private void initializeSnackBar() {
+        snackbar = Snackbar.make(parentView, "Transmitting", Snackbar.LENGTH_INDEFINITE);
     }
 
     private void initializeUdpListener() {
@@ -235,6 +255,20 @@ public class MainActivity extends AppCompatActivity {
         //call the respective Tile's update function
         @Override
         public void run() {
+            if(audio_transmit_enabled) {
+                snackbar.make(parentView, "Transmitting", Snackbar.LENGTH_INDEFINITE);
+                snackbar.setAction("Action", null).show();
+                snackbarOff = false;
+                fab.setImageResource(R.mipmap.ic_mic_black_24dp);
+            } else if(audio_receive_active) {
+                snackbar.make(parentView, transmitting_client_ID + " Transmitting", Snackbar.LENGTH_INDEFINITE);
+                snackbar.setAction("Action", null).show();
+                snackbarOff = false;
+            } else {
+                snackbar.dismiss();
+                snackbarOff = true;
+                fab.setImageResource(R.mipmap.ic_mic_none_black_24dp);
+            }
             //Fragment currentTab = tabManager.getItem(mViewPager.getCurrentItem());
             int currentTp = dataStorage.getThrottleData();
             int currentBrake = dataStorage.getBrakeData();
@@ -261,9 +295,30 @@ public class MainActivity extends AppCompatActivity {
         }
     };
 
+    private class RequestAudioTransmissionTask extends AsyncTask<String, String, Boolean> {
+        @Override
+        protected Boolean doInBackground(String... message) {
+            mTcpClient.requestAudioTransmission();
+            while(!audio_transmit_enabled && !audio_transmit_rejected); // wait for acknowledgement
+            if(audio_transmit_enabled) {
+                activateAudioStream();
+            }
+            // TODO : audio transmit rejected
+            return false;
+        }
+
+        @Override
+        protected void onProgressUpdate(String... values) {
+            super.onProgressUpdate(values);
+
+        }
+    }
+
     private class ConnectTcpServerTask extends AsyncTask<String, String, TcpClient> {
         @Override
         protected TcpClient doInBackground(String... message) {
+            while(dataStorage.getServerIP().isEmpty()); // wait for serverIP to be received
+            mTcpClient.setServerIP(dataStorage.getServerIP());
             mTcpClient.run();
             return null;
         }
