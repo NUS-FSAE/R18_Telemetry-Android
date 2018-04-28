@@ -18,6 +18,7 @@ import android.support.v7.widget.Toolbar;
 import android.util.Log;
 import android.view.MenuItem;
 import android.view.View;
+import android.view.WindowManager;
 import android.widget.ProgressBar;
 import android.widget.TextView;
 import java.util.ArrayList;
@@ -27,8 +28,18 @@ public class MainActivity extends AppCompatActivity {
     
     private static final double MAX_BRAKE_PRESSURE = 70.0;
     private static final int MY_PERMISSIONS_REQUEST_RECORD_AUDIO = 1;
-    private static final String AUDIO_RECEIVE_ACTIVE_MESSAGE = "Transmitting:";
-    private static final String AUDIO_TRANSMIT_REJECTED_MESSAGE = "Channel in use";
+
+    // Commands needed to communicate with server
+    private static final String REGISTER_USER_SUCCESSFUL = "Registered";
+    private static final String AUDIO_TRANSMIT_ACCEPTED = "Granted";
+    private static final String AUDIO_TRANSMIT_REJECTED = "Channel in use";
+    private static final String AUDIO_RECEIVE_ACTIVE= "Transmit";
+    private static final String AUDIO_TERMINATE = "Terminate";
+
+
+    // Strings used to display in snackbar
+    private static final String SNACKBAR_TRANSMITTING = "Transmitting...";
+    private static final String SNACKBAR_RECEIVING = "Receiving from: ";
 
     private AudioStreamThread audioThread ;
     private AudioReceiveThread audioReceiveThread;
@@ -77,6 +88,7 @@ public class MainActivity extends AppCompatActivity {
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_main);
+        getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
 
         // Setup drawer and toolbar
         mDrawerLayout = (DrawerLayout) findViewById(R.id.drawerLayout);
@@ -129,7 +141,10 @@ public class MainActivity extends AppCompatActivity {
             @Override
             public void onClick(View view) {
                 if(registered && snackbarOff && !audio_transmit_enabled && !audio_receive_active) {
-                    new RequestAudioTransmissionTask().executeOnExecutor(AsyncTask.THREAD_POOL_EXECUTOR);
+                    //new RequestAudioTransmissionTask().executeOnExecutor(AsyncTask.THREAD_POOL_EXECUTOR);
+                    if(!audio_receive_active) {
+                        mTcpClient.requestAudioTransmission();
+                    }
                 } else if(audio_transmit_enabled) {
                     audio_transmit_enabled = false;
                     deactivateAudioStream();
@@ -146,21 +161,26 @@ public class MainActivity extends AppCompatActivity {
             //here the messageReceived method is implemented
             public void messageReceived(String message) {
                 // process the received message from TCP server
-                if(message.equals("Registered")) {
+                if(message.equals(REGISTER_USER_SUCCESSFUL)) {
                     registered = true;
-                } else if(message.equals("Granted")) {   //grant audio access command
+                } else if(message.equals(AUDIO_TRANSMIT_ACCEPTED)) {   //grant audio access command
                     audio_transmit_enabled = true;
+                    activateAudioStream();
                     Log.e("onMessageReceived","audio_transmit_enabled" );
-                } else if(message.equals(AUDIO_TRANSMIT_REJECTED_MESSAGE)) {
+                } else if(message.equals(AUDIO_TRANSMIT_REJECTED)) {
                     audio_transmit_rejected = true;
-                } else if(message.contains(AUDIO_RECEIVE_ACTIVE_MESSAGE)) {
+                } else if(message.contains(AUDIO_RECEIVE_ACTIVE)) {
                     audio_transmit_enabled = false;
                     audio_transmit_rejected = false;
                     audio_receive_active = true;
-                    transmitting_client_ID = message;
+                    transmitting_client_ID = message.substring(AUDIO_RECEIVE_ACTIVE.length()); //extract the userID
+                    activateAudioReceive();
+                } else if (message.equals(AUDIO_TERMINATE)) {
+                    if(audioReceiveThread != null && !audioReceiveThread.isInterrupted()) {
+                        audio_receive_active = false;
+                        deactivateAudioReceive();
+                    }
                 }
-//                audioReceiveThread = new AudioReceiveThread();
-//                audioReceiveThread.start();
             }
         });
         new ConnectTcpServerTask().execute();
@@ -174,6 +194,15 @@ public class MainActivity extends AppCompatActivity {
                     MY_PERMISSIONS_REQUEST_RECORD_AUDIO);
             return;
         }
+    }
+
+    private void activateAudioReceive() {
+        audioReceiveThread = new AudioReceiveThread();
+        audioReceiveThread.start();
+    }
+
+    private void deactivateAudioReceive() {
+        audioReceiveThread.interrupt();
     }
 
     private void activateAudioStream() {
@@ -256,12 +285,12 @@ public class MainActivity extends AppCompatActivity {
         @Override
         public void run() {
             if(audio_transmit_enabled) {
-                snackbar.make(parentView, "Transmitting", Snackbar.LENGTH_INDEFINITE);
+                snackbar.setText("Transmitting");
                 snackbar.setAction("Action", null).show();
                 snackbarOff = false;
                 fab.setImageResource(R.mipmap.ic_mic_black_24dp);
             } else if(audio_receive_active) {
-                snackbar.make(parentView, transmitting_client_ID + " Transmitting", Snackbar.LENGTH_INDEFINITE);
+                snackbar.setText(SNACKBAR_RECEIVING + transmitting_client_ID);
                 snackbar.setAction("Action", null).show();
                 snackbarOff = false;
             } else {
